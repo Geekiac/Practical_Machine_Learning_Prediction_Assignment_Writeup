@@ -1,0 +1,111 @@
+---
+title: "Practical Machine Learning Prediction Assignment Writeup"
+author: "Steven Smith"
+date: "11 July 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+This is a report documenting the approach to predict a 20 observations of test data relating to the Human Activity Recognition project at http://groupware.les.inf.puc-rio.br/har.  Data has been gathered from multiple sensors whilst people performed barbell lifts.  The lift was then categorised into lifting correctly or four types of lifting incorrectly, creating five categories labelled A, B, C, D, E.  This method in this report takes a subset of the columns and rows to train a Random Forest predictor to predict which category the observation belongs to.  The resulting prediction model successfully precdicts the 20 observations and took about one hour to train.
+
+## How the model was built
+To allow for reproducibility we set the seed, so that the same model will be generated on subsequent runs.
+```{r setting-the-seed}
+set.seed(21534)
+```
+
+The initial training and testing datasets are downloaded from the web and put into data frames.
+```{r loading-data, cache=TRUE}
+if (!file.exists("pml-training.csv")) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")
+}
+if (!file.exists("pml-testing.csv")) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")
+}
+pml.training <- read.csv("pml-training.csv")
+pml.testing <- read.csv("pml-testing.csv")
+```
+
+### Dimension reduction
+As the datasets initially has 160 variables, removing the redundant dimensions helps the model to predict more accurately and quickly.  The X and user\_name columns contain data that is not relevant to the prediction model.  The cvtd\_timestamp is repetition of data that is held in the two raw columns before it.
+```{r removing-unwanted-columns, cache=TRUE, message=FALSE}
+library(caret)
+pml.training2 <- pml.training[, -c(1:2, 5)] # remove X, user_name and cvtd_timestamp
+pml.testing2 <- pml.testing[, -c(1:2, 5)]   # remove X, user_name and cvtd_timestamp
+```
+
+Now we remove the columns that have near zero variance and will not help to seperate the categories.
+```{r removing-near-zero-variance-columns, cache=TRUE}
+nzv <- nearZeroVar(pml.training2)
+pml.training2 <- pml.training2[, -nzv]
+pml.testing2 <- pml.testing2[, -nzv]
+```
+
+There are also a number of columns that contain NAs.
+```{r number-of-columns-containing-NAs-before, cache=TRUE}
+sum(apply(as.array(1:ncol(pml.training2)), 1,function(x) sum(is.na(pml.training2[, x]))>0))
+```
+
+We shall remove all of the columns where at least 95% of their values are NA.
+```{r remove-columns-with-95-percent-more-NAs, cache=TRUE}
+cols.with.less.than.95.percent.NA <- apply(as.array(1:97), 1,function(x) mean(is.na(pml.training2[, x]))<0.95)
+pml.training2 <- pml.training2[, cols.with.less.than.95.percent.NA]
+pml.testing2 <- pml.testing2[, cols.with.less.than.95.percent.NA]
+```
+
+There are no longer any columns that contain NAs.  The number of variables to consider has been reduced to 56.
+```{r number-of-columns-containing-NAs-after, cache=TRUE}
+sum(apply(as.array(1:ncol(pml.training2)), 1,function(x) sum(is.na(pml.training2[, x]))>0))
+```
+
+### Partitioning the data
+The data is partitioned into 60% for training and 40% for testing the model.
+```{r partition-training-data, cache=TRUE}
+inTraining <- createDataPartition(y=pml.training2$classe, p = 0.60, list = FALSE)
+train <- pml.training2[inTraining,]
+test <- pml.training2[-inTraining,]
+```
+
+### Training the model
+The model is trained using cross k-fold cross-validation with 10 folds.  This helps to reduce over-fitting of the model.  The data is preprocessed using center and scale, to normalize the data, and reduce the effects of skewed data in a variable.  The model uses a Random forest to predict.
+```{r train-model, cache=TRUE}
+trCtrl <- trainControl(method="cv", number=10)
+model <- train(classe ~ ., 
+               data=train, 
+               method = "rf", 
+               prox=TRUE, 
+               trControl=trCtrl, 
+               preProcess = c("center", "scale")  #tried pca but it dropped the accuracy!
+               )
+model
+```
+As you can see above the model was 99.8% accurate on the training data, using 10 fold cross validation using sample sizes of approximately 10600.
+
+### Generating a confusion matrix for the test data predictions.
+``` {r confusion-matrix-for-test-data, cache=TRUE }
+confusionMatrix(predict(model, newdata = test), test$classe)
+```
+
+### Final prediction against the actual test dataset containing the 20 observations we want to predict.
+``` {r predict-against-actual-test-data, cache=TRUE}
+predict(model, newdata = pml.testing2)
+```
+
+## Use of cross validation
+The method using 10 fold cross validation to help reduce over-fitting.
+
+## Out of sample error
+When testing with the first "40% of training data" test data set the accuracy was found to be 0.9985, suggesting that expected out of sample error is likely to be < 0.01.
+
+## Choices Made
+- Remove the X, user_name and cvtd_timestamp variables
+- Remove the variables of with near zero variance
+- Remove columns with 95% or greater of the values are NA.
+- No. of variables reduced from 160 to 56 (including classe)
+- Training vs Test data split 60% to 40%
+- Preprocess with center and scale to normalize data.
+-- Use 10 fold cross validation and a Random Forest predictor.
